@@ -1,0 +1,5 @@
+---
+ name: replace-track
+ description: Example of track replacement using Pion WebRTC
+ authors:
+   - Chad Retz

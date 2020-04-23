@@ -5,6 +5,7 @@ package webrtc
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"math/rand"
@@ -1073,4 +1074,59 @@ func TestPlanBMultiTrack(t *testing.T) {
 
 	assert.NoError(t, pcOffer.Close())
 	assert.NoError(t, pcAnswer.Close())
+}
+
+func TestRTPSender_ReplaceTrack_Errors(t *testing.T) {
+	// TODO: Bad kind
+	// TODO: Stopped transceiver
+	// TODO: Renegotiation
+	t.Skip("TODO")
+}
+
+func TestRTPSender_ReplaceTrack_Nil(t *testing.T) {
+	t.Skip("TODO")
+}
+
+func TestRTPSender_ReplaceTrack(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// Create conn pair
+	api := NewAPI()
+	pcOffer, pcAnswer, err := api.newPair(Configuration{})
+	require.NoError(t, err)
+	defer pcOffer.Close()
+	defer pcAnswer.Close()
+	// Add video transceiver on answer side
+	_, err = pcAnswer.AddTransceiverFromKind(RTPCodecTypeVideo)
+	require.NoError(t, err)
+	answerTrackCh := make(chan *Track, 1)
+	defer close(answerTrackCh)
+	pcAnswer.OnTrack(func(t *Track, _ *RTPReceiver) { answerTrackCh <- t })
+	// Create two tracks on offer side
+	trackOne, err := pcOffer.NewTrack(DefaultPayloadTypeVP8, rand.Uint32(), "trackOneID", "trackOneLabel")
+	require.NoError(t, err)
+	trackTwo, err := pcOffer.NewTrack(DefaultPayloadTypeVP8, rand.Uint32(), "trackTwoID", "trackTwoLabel")
+	require.NoError(t, err)
+	// Constantly send samples to the tracks
+	go func() {
+		ticker := time.NewTicker(time.Millisecond * 20)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := trackOne.WriteSample(media.Sample{Data: []byte{0x01}, Samples: 1}); err != nil {
+					t.Logf("Failed writing trackOne sample: %v", err)
+					return
+				} else if err = trackTwo.WriteSample(media.Sample{Data: []byte{0x02}, Samples: 1}); err != nil {
+					t.Logf("Failed writing trackTwo sample: %v", err)
+					return
+				}
+			}
+		}
+	}()
+	// Add track one
+	_, err = pcOffer.AddTrack(trackOne)
+	t.Skip("TODO: the rest")
 }

@@ -16,7 +16,8 @@ type RTPSender struct {
 	track          *Track
 	rtcpReadStream *srtp.ReadStreamSRTCP
 
-	transport *DTLSTransport
+	transport   *DTLSTransport
+	transceiver *RTPTransceiver
 
 	// A reference to the associated api object
 	api *API
@@ -62,6 +63,21 @@ func (r *RTPSender) Track() *Track {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.track
+}
+
+// ReplaceTrack replaces the current track with the given one. If the given
+// track is nil, this sender is stopped.
+func (r *RTPSender) ReplaceTrack(track *Track) error {
+	r.mu.RLock()
+	transceiver := r.transceiver
+	existingTrack := r.track
+	r.mu.RUnlock()
+	if transceiver == nil {
+		return fmt.Errorf("sender has no transceiver")
+	} else if existingTrack != nil && existingTrack == track {
+		// No change means no replacement
+	}
+	return transceiver.replaceTrack(track)
 }
 
 // Send Attempts to set the parameters controlling the sending of media.

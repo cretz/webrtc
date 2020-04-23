@@ -5,6 +5,8 @@ package webrtc
 import (
 	"fmt"
 	"sync/atomic"
+
+	"github.com/pion/webrtc/v2/pkg/rtcerr"
 )
 
 // RTPTransceiver represents a combination of an RTPSender and an RTPReceiver that share a common mid.
@@ -27,6 +29,19 @@ func (t *RTPTransceiver) Sender() *RTPSender {
 }
 
 func (t *RTPTransceiver) setSender(s *RTPSender) {
+	// Set on sender
+	if s != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.transceiver = t
+	}
+	// Remove from current sender if there
+	if currSender := t.Sender(); currSender != nil {
+		// Lock for rest of function for atomic swap
+		currSender.mu.Lock()
+		defer currSender.mu.Unlock()
+		currSender.transceiver = nil
+	}
 	t.sender.Store(s)
 }
 
@@ -87,6 +102,66 @@ func (t *RTPTransceiver) setSendingTrack(track *Track) error {
 	default:
 		return fmt.Errorf("invalid state change in RTPTransceiver.setSending")
 	}
+	return nil
+}
+
+// Expected to be called from RTPSender (sans lock). Steps inspired by
+// https://w3c.github.io/webrtc-pc/#dom-rtcrtpsender-replacetrack.
+func (t *RTPTransceiver) replaceTrack(track *Track) error {
+	if track != nil && track.Kind() != t.kind {
+		return &rtcerr.TypeError{Err: fmt.Errorf("track is kind %v, transceiver kind is %v", track.Kind(), t.kind)}
+	} else if t.stopped {
+		return &rtcerr.InvalidStateError{Err: fmt.Errorf("transceiver is stopped")}
+	}
+	// Should always be non-nil
+	sender := t.Sender()
+	// If it's not sending, just set the track
+	if dir := t.Direction(); dir != RTPTransceiverDirectionSendrecv && dir != RTPTransceiverDirectionSendonly {
+		return t.setSendingTrack(track)
+	}
+	// Nil track means stop the sender
+	if track == nil {
+		if err := sender.Stop(); err != nil {
+			return err
+		}
+		return t.setSendingTrack(nil)
+	}
+	// Lock the sender and track from here on out
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	track.mu.Lock()
+	defer track.mu.Unlock()
+	if track.receiver != nil {
+		return fmt.Errorf("cannot replace with remote track")
+	}
+	// Unset current track
+	if sender.track != nil {
+		// Lock existing track from here on out
+		sender.track.mu.Lock()
+		defer sender.track.mu.Unlock()
+		// Confirm existing track doesn't require renegotiation. For now, we'll
+		// just check the mime type.
+		if sender.track.codec.MimeType != track.codec.MimeType {
+			return &rtcerr.InvalidModificationError{
+				Err: fmt.Errorf("replacement would require renegotiation, current track type %v, new track type is %v",
+					sender.track.codec.MimeType, track.codec.MimeType),
+			}
+		}
+		// Remove sender from active senders
+		filtered := make([]*RTPSender, 0, len(sender.track.activeSenders)-1)
+		for _, s := range sender.track.activeSenders {
+			if s != sender {
+				filtered = append(filtered, s)
+			} else {
+				sender.track.totalSenderCount--
+			}
+		}
+		sender.track.activeSenders = filtered
+	}
+	// Set the new track
+	sender.track = track
+	track.activeSenders = append(track.activeSenders, sender)
+	track.totalSenderCount++
 	return nil
 }
 
