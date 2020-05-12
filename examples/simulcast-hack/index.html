@@ -1,0 +1,112 @@
+<html>
+<head>
+  <title>simulcast-hack</title>
+</head>
+<body>
+  <button onclick="window.captureCamera()"> Capture Camera </button><br />
+
+  <div id="signalContainer" style="display: none">
+    Browser base64 Session Description<br />
+    <textarea id="localSessionDescription" readonly="true"></textarea> <br />
+    
+    Golang base64 Session Description<br />
+    <textarea id="remoteSessionDescription"></textarea> <br/>
+    <button onclick="window.startSession()"> Start Session </button><br />
+    
+    <div>
+      Camera<br />
+      <video id="cameraVideo" height="480" autoplay muted></video>
+    </div>
+  </div>
+
+  <div id="serverVideoContainer" style="display: none">
+    Video from server, quality:
+    <label for="qualityHigh"><input type="radio" id="qualityHigh" name="quality" checked> High</label>
+    <label for="qualityMedium"><input type="radio" id="qualityMedium" name="quality"> Medium</label>
+    <label for="qualityLow"><input type="radio" id="qualityLow" name="quality"> Low</label>
+    <br />
+    <video id="serverVideo" height="480" autoplay muted></video>
+  </div>
+  
+  <script>
+    // Create peer conn
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        {
+          urls: 'stun:stun.l.google.com:19302'
+        }
+      ]
+    })
+
+    pc.oniceconnectionstatechange = e => {
+      console.debug('connection state change', pc.iceConnectionState)
+      if (pc.iceConnectionState == 'connected') document.getElementById('serverVideoContainer').style.display = ''
+    }
+    pc.onicecandidate = event => {
+      if (event.candidate === null) {
+        document.getElementById('localSessionDescription').value = btoa(JSON.stringify(pc.localDescription))
+      }
+    }
+
+    pc.ontrack = event => {
+      console.log('Got track event', event)
+      document.getElementById('serverVideo').srcObject = new MediaStream([event.track])
+    }
+
+    // Callback to update the quality
+    let dataChannel
+    const updateQuality = () => {
+      if (!dataChannel) return
+      let rid
+      if (document.getElementById('qualityHigh').checked) rid = 'a'
+      else if (document.getElementById('qualityMedium').checked) rid = 'b'
+      else rid = 'c'
+      dataChannel.send('{"rid": "' + rid + '"}')
+    }
+    document.getElementById('qualityHigh').onchange = () => updateQuality()
+    document.getElementById('qualityMedium').onchange = () => updateQuality()
+    document.getElementById('qualityLow').onchange = () => updateQuality()
+
+    let cameraTrack
+    window.captureCamera = () => {
+      navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false })
+      .then(stream => {
+        // Set the camera
+        document.getElementById('cameraVideo').srcObject = stream
+        cameraTrack = stream.getVideoTracks()[0]
+        // Add the transceiver with the simulcasted params (one high quality,
+        // one medium quality, and one low)
+        pc.addTransceiver(cameraTrack, {
+          direction: 'sendonly',
+          sendEncodings: [
+            { rid: 'a', active: true, maxBitrate: 900000 },
+            { rid: 'b', active: true, maxBitrate: 300000, scaleResolutionDownBy: 2 },
+            { rid: 'c', active: true, maxBitrate: 100000, scaleResolutionDownBy: 4 }
+          ]
+        })
+        // Create data channel to send rid changes on
+        const channel = pc.createDataChannel('data')
+        // On open, send the quality
+        channel.onopen = () => {
+          dataChannel = channel
+          updateQuality()
+        }
+        pc.createOffer().then(d => pc.setLocalDescription(d)).catch(console.error)
+        document.getElementById('signalContainer').style.display = ''
+      }).catch(console.error)
+    }
+
+    window.startSession = () => {
+      const sd = document.getElementById('remoteSessionDescription').value
+      if (sd === '') {
+        return alert('Session Description must not be empty')
+      }
+      try {
+        pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(atob(sd))))
+      } catch (e) {
+        alert(e)
+      }
+    }
+  </script>
+</body>
+</html>

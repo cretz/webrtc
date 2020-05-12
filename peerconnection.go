@@ -207,6 +207,8 @@ func (pc *PeerConnection) initConfiguration(configuration Configuration) error {
 		pc.configuration.SDPSemantics = configuration.SDPSemantics
 	}
 
+	pc.configuration.AcceptUndeclaredSSRCAsVideo = configuration.AcceptUndeclaredSSRCAsVideo
+
 	sanitizedICEServers := configuration.getICEServers()
 	if len(sanitizedICEServers) > 0 {
 		for _, server := range sanitizedICEServers {
@@ -1027,6 +1029,23 @@ func (pc *PeerConnection) startSCTP() {
 // If the remote SDP was only one media section the ssrc doesn't have to be explicitly declared
 func (pc *PeerConnection) drainSRTP() {
 	handleUndeclaredSSRC := func(ssrc uint32) bool {
+		// If always accepting, handle it
+		if pc.configuration.AcceptUndeclaredSSRCAsVideo {
+			incoming := trackDetails{
+				ssrc: ssrc,
+				kind: RTPCodecTypeVideo,
+			}
+			t, err := pc.AddTransceiverFromKind(incoming.kind, RtpTransceiverInit{
+				Direction: RTPTransceiverDirectionSendrecv,
+			})
+			if err != nil {
+				pc.log.Warnf("Could not add transceiver for remote SSRC %d: %s", ssrc, err)
+				return false
+			}
+			pc.startReceiver(incoming, t.Receiver())
+			return true
+		}
+
 		if remoteDescription := pc.RemoteDescription(); remoteDescription != nil {
 			if len(remoteDescription.parsed.MediaDescriptions) == 1 {
 				onlyMediaSection := remoteDescription.parsed.MediaDescriptions[0]
