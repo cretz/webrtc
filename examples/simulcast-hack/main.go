@@ -152,11 +152,11 @@ func main() {
 			}
 			lastTimestamp = oldTimestamp
 
-			// Check the RTP stream ID (heh, written exactly two weeks prior feast
-			// day of the venerable bede :-)
-			if !rtp.Extension || rtp.ExtensionProfile != 0xBEDE || len(rtp.ExtensionPayload) < 3 || rtp.ExtensionPayload[0] != byte(ridExt.Value<<4) {
+			// Check the RTP stream ID
+			extPayload := rtp.GetExtension(uint8(ridExt.Value))
+			if len(extPayload) == 0 {
 				panic("Expected RTP Stream ID in extension, did not get")
-			} else if rtp.ExtensionPayload[1] != currRTPStreamID {
+			} else if extPayload[0] != currRTPStreamID {
 				// Skip if not the current stream ID
 				isCurrTrack = false
 				continue
@@ -207,7 +207,7 @@ func main() {
 			// Keep an increasing sequence number
 			packet.SequenceNumber = i
 			// Clear out extension stuff
-			packet.Extension, packet.ExtensionProfile, packet.ExtensionPayload = false, 0, nil
+			packet.Extension, packet.ExtensionProfile, packet.Extensions = false, 0, nil
 			// Write out the packet, ignoring closed pipe if nobody is listening
 			if err := outputTrack.WriteRTP(packet); err != nil && err != io.ErrClosedPipe {
 				panic(err)
